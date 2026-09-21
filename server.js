@@ -396,7 +396,12 @@ async function handle(d){
    }
    return{added,errs,bankN:bank.length};
   }
-  case 'act':return act(d);
+    case 'settings':
+  case 'start':
+  case 'answer':
+  case 'skip':
+  case 'skipReply':
+  case 'rematch': return act(d);
  }
  return{error:'неизвестное действие'};
 }
