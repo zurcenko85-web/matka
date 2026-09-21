@@ -93,8 +93,7 @@ label{display:block;font-family:'JetBrains Mono',monospace;font-size:10px;text-t
 .toast b{display:block;font-family:'JetBrains Mono',monospace;font-size:9px;text-transform:uppercase;
  letter-spacing:.2em;color:rgba(244,239,228,.6);margin-bottom:2px}
 @keyframes ti{from{opacity:0;transform:translateX(30px)}to{opacity:1}}
-header{display:flex;justify-content:flex-end;align-items:center;gap:10px;padding:14px 20px 0;
- font-size:13px;color:var(--soft)}
+header{display:flex;justify-content:flex-end;align-items:center;gap:10px;padding:14px 20px 0;font-size:13px;color:var(--soft)}
 </style></head><body>
 <header>
  <span id="userBox" hidden>аккаунт: <b id="who"></b></span>
@@ -120,7 +119,7 @@ header{display:flex;justify-content:flex-end;align-items:center;gap:10px;padding
  </div>
 </section>
 
-<!-- ГЛАВНАЯ (после входа) -->
+<!-- ГЛАВНАЯ -->
 <section id="scr-home" hidden>
  <div class="over"><b></b>лобби · вы вошли</div>
  <h1>Сыграем <em>дуэль?</em></h1>
@@ -165,7 +164,7 @@ header{display:flex;justify-content:flex-end;align-items:center;gap:10px;padding
   <label>Темы генераторов</label>
   <div class="chips" id="chips"></div>
   <div id="bankBox">
-   <div class="ttl" style="margin-top:18px">Банк прототипов <span class="note" style="margin:0 ok" id="bankN"></span></div>
+   <div class="ttl" style="margin-top:18px">Банк прототипов <span class="note" style="margin:0" id="bankN"></span></div>
    <div class="row"><input id="inIds" class="mono" placeholder="номера задач: 26576 27439 …"
      style="flex:3;font-size:14px" autocomplete="off" spellcheck="false">
    <button class="btn small" id="btnFetch" style="flex:1">Загрузить</button></div>
@@ -231,10 +230,13 @@ header{display:flex;justify-content:flex-end;align-items:center;gap:10px;padding
 <div class="toasts" id="toasts"></div>
 
 <script>
+/* ═══ утилиты ═══ */
 const $=id=>document.getElementById(id);
 const TOPICS=[['eq','Уравнения'],['pow','Преобразования'],['der','Производная'],['pro','Вероятность'],
  ['pla','Планиметрия'],['ste','Стереометрия'],['txt','Текстовые']];
-let ES=null,CUR=null,VIEW=null,off=0,tint=null,lastRN=0,evKey='',noteKey='';
+let CUR=null,VIEW=null,off=0,tint=null,pollTO=null,lastRN=0,evKey='',noteKey='';
+let pollTO_set=false,firstSnapAt=0,connNote=null;
+
 function toast(t,m){const d=document.createElement('div');d.className='toast';
  d.innerHTML='<b>'+t+'</b>'+m;$('toasts').appendChild(d);setTimeout(()=>d.remove(),4500)}
 const SCREENS=['scr-auth','scr-home','scr-wait','scr-arena','scr-final'];
@@ -243,6 +245,9 @@ function show(id){SCREENS.forEach(s=>{$(s).hidden=(s!==id);$(s).style.display=(s
 function showOv(){const o=$('ov');o.hidden=false;o.style.display='flex'}
 function hideOv(){const o=$('ov');o.hidden=true;o.style.display='none'}
 function hideOffer(){const o=$('offer');o.hidden=true;o.style.display='none'}
+function shake(){const i=$('inA');i.classList.remove('shake');void i.offsetWidth;i.classList.add('shake')}
+
+/* ═══ API ═══ */
 async function api(action,extra={}){
  const r=await fetch('/api',{method:'POST',headers:{'Content-Type':'application/json'},
   body:JSON.stringify(Object.assign({action,token:localStorage.teo_tok||''},extra))});
@@ -254,14 +259,16 @@ async function gact(action,extra={}){
   body:JSON.stringify(Object.assign({rtok:CUR.rtok,action},extra))});
  return r.json();
 }
-/* ── сессии комнат ── */
+
+/* ═══ сессии комнат (локально, для кнопки «недавние») ═══ */
 const roomsLS=()=>{try{return JSON.parse(localStorage.teo_rooms||'[]')}catch(e){return[]}};
 function saveRoomSess(s){let r=roomsLS().filter(x=>x.code!==s.code);r.unshift(s);
  localStorage.teo_rooms=JSON.stringify(r.slice(0,6))}
 function renderRecent(){const b=$('recent');b.innerHTML='';
  roomsLS().slice(0,5).forEach(s=>{const x=document.createElement('button');x.textContent=s.code;
   x.onclick=()=>openRoom(s);b.appendChild(x)})}
-/* ── экраны аккаунта ── */
+
+/* ═══ авторизация ═══ */
 let AUTHMODE='login';
 document.querySelectorAll('#authTabs button').forEach(b=>b.onclick=()=>{
  AUTHMODE=b.dataset.m;
@@ -276,6 +283,7 @@ document.querySelectorAll('#authTabs button').forEach(b=>b.onclick=()=>{
  showHome(r.login);
 };
  $('inPass').addEventListener('keydown',e=>{if(e.key==='Enter')$('btnAuth').click()});
+ $('inLogin').addEventListener('keydown',e=>{if(e.key==='Enter')$('inPass').focus()});
  $('btnLogout').onclick=()=>{localStorage.removeItem('teo_tok');localStorage.removeItem('teo_login');
  location.reload()};
 function showHome(login){
@@ -292,23 +300,8 @@ function showHome(login){
   localStorage.removeItem('teo_tok');localStorage.removeItem('teo_login')}
  show('scr-auth');
 })();
-/* ── комнаты ── */
- $('btnCreate').onclick=async()=>{
- const r=await api('create',{name:$('inName').value});
- if(r.error){toast('Не вышло',r.error);return}
- const s={code:r.code,rtok:r.rtok,seat:r.seat};
- saveRoomSess(s);openRoom(s);
-};
- $('btnJoin').onclick=async()=>{
- const code=$('inCode').value.trim().toLowerCase();
- if(!/^[a-z0-9]{6}$/.test(code)){toast('Код','Введите код из 6 символов.');return}
- const r=await api('join',{code,name:$('inName').value});
- if(r.error){toast('Не вышло',r.error);return}
- const s={code:r.code,rtok:r.rtok,seat:r.seat};
- saveRoomSess(s);openRoom(s);
-};
- $('inCode').addEventListener('keydown',e=>{if(e.key==='Enter')$('btnJoin').click()});
-let pollTO=null,firstSnapAt=0,connNote=null;
+
+/* ═══ комнаты: связь через опрос /state ═══ */
 function setConn(t,bad){
  if(connNote&&connNote.parentNode)connNote.remove();
  connNote=null;
@@ -317,7 +310,8 @@ function setConn(t,bad){
  connNote.className='note';
  connNote.style.color=bad?'#BF3B2B':'#4a7c3f';
  connNote.textContent=t;
- document.querySelector('#scr-wait .card').prepend(connNote);
+ const card=document.querySelector('#scr-wait .card');
+ if(card)card.prepend(connNote);
 }
 function openRoom(s){
  clearTimeout(pollTO);
@@ -333,10 +327,16 @@ async function poll(){
  try{
   const q='/state?rtok='+encodeURIComponent(CUR.rtok)+'&v='+(VIEW?VIEW.v:-1);
   const r=await fetch(q);
-  if(r.status===403){fatal('Комната не найдена — сервер мог перезапуститься. Создайте комнату заново.');return}
+  if(r.status===403){
+   fatal('Комната не найдена — сервер мог перезапуститься. Создайте комнату заново.');return;
+  }
   const j=await r.json();
   if(j.room){
-   if(!firstSnapAt){firstSnapAt=1;setConn('связь с комнатой установлена');setTimeout(()=>setConn(null),2500)}
+   if(!firstSnapAt){
+    firstSnapAt=1;
+    setConn('связь с комнатой установлена');
+    setTimeout(()=>{if(firstSnapAt)setConn(null)},2500);
+   }
    VIEW=j.room;apply();
   }
  }catch(e){
@@ -355,7 +355,25 @@ function fatal(msg){
 }
  $('btnExitRoom').onclick=()=>fatal('Вы покинули комнату.');
  $('btnNew').onclick=()=>fatal(null);
-/* ── применение состояния ── */
+
+/* ═══ создание / вход ═══ */
+ $('btnCreate').onclick=async()=>{
+ const r=await api('create',{name:$('inName').value});
+ if(r.error){toast('Не вышло',r.error);return}
+ const s={code:r.code,rtok:r.rtok,seat:r.seat};
+ saveRoomSess(s);openRoom(s);
+};
+ $('btnJoin').onclick=async()=>{
+ const code=$('inCode').value.trim().toLowerCase();
+ if(!/^[a-z0-9]{6}$/.test(code)){toast('Код','Введите код из 6 символов.');return}
+ const r=await api('join',{code,name:$('inName').value});
+ if(r.error){toast('Не вышло',r.error);return}
+ const s={code:r.code,rtok:r.rtok,seat:r.seat};
+ saveRoomSess(s);openRoom(s);
+};
+ $('inCode').addEventListener('keydown',e=>{if(e.key==='Enter')$('btnJoin').click()});
+
+/* ═══ применение состояния ═══ */
 function apply(){
  const v=VIEW;if(!v)return;
  off=v.servertime-Date.now();
@@ -363,7 +381,8 @@ function apply(){
  if(v.note){const k='n'+v.v;if(k!==noteKey){noteKey=k;toast('Сервер',v.note)}}
  if(v.skipEv){const k='s'+v.v;if(k!==evKey){evKey=k;
   if(v.skipEv.to===v.seat)toast('Пропуск',v.skipEv.res==='ok'?'Соперник согласился — задание пропущено.'
-   :v.skipEv.res==='no'?'Соперник отклонил — продолжаем решать.':'Нет ответа за 15 секунд.')}}
+   :v.skipEv.res==='no'?'Соперник отклонил — продолжаем решать.':'Нет ответа за 15 секунд.');
+  else if(v.skipEv.res==='ok')toast('Пропуск','Вы пропустили задание по согласию соперника.')}}
  $('nmL').textContent='вы · '+(v.names[v.seat]||'вы');
  $('nmR').textContent='соперник · '+(v.names[1-v.seat]||'ждём…');
  if(v.phase==='lobby'){show('scr-wait');renderLobby();return}
@@ -376,7 +395,7 @@ function apply(){
  $('opTries').textContent=v.tries[1-v.seat]?'ошибок соперника: '+v.tries[1-v.seat]:'';
  if(v.phase==='round'&&v.round){
   if(v.round.n!==lastRN){lastRN=v.round.n;mountRound(v.round)}
-  tickTimer();
+  else tickTimer();
  }
  if(v.phase==='between'){
   clearInterval(tint);$('tN').textContent='0:00';$('tB').style.width='0%';
@@ -417,11 +436,13 @@ function mountRound(r){
  clearInterval(tint);tickTimer();tint=setInterval(tickTimer,200);
  setTimeout(()=>i.focus(),80);
 }
-function tickTimer(){const r=VIEW&&VIEW.round;if(!r)return;
+function tickTimer(){
+ const r=VIEW&&VIEW.round;if(!r)return;
  const left=Math.max(0,r.deadline-(Date.now()+off));
  $('tB').style.width=(left/(VIEW.time*1000)*100)+'%';
  const s=Math.ceil(left/1000);$('tN').textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
- $('tw').classList.toggle('warn',left<=10000&&left>0)}
+ $('tw').classList.toggle('warn',left<=10000&&left>0);
+}
 function showRoundEnd(l){
  $('ovK').textContent='раунд '+l.n;
  $('ovT').innerHTML=l.kind==='skip'?'Задание <em>пропущено</em>'
@@ -451,7 +472,8 @@ function renderFinal(){
  $('fStats').innerHTML=rows.map(r=>'<div><span>'+r[0]+'</span><b class="mono">'+r[1]+'</b></div>').join('');
  $('btnRe').hidden=v.seat!==0;
 }
-/* ── игровые действия ── */
+
+/* ═══ игровые действия ═══ */
  $('segT').querySelectorAll('button').forEach(b=>b.onclick=()=>{
  if(VIEW&&VIEW.seat===0)gact('settings',{settings:{target:+b.dataset.v}})});
  $('segTime').querySelectorAll('button').forEach(b=>b.onclick=()=>{
@@ -460,12 +482,14 @@ function renderFinal(){
  if(VIEW&&VIEW.seat===0)gact('settings',{settings:{source:b.dataset.v}})});
  $('btnStart').onclick=async()=>{const r=await gact('start');if(r.error)toast('Старт',r.error)};
 async function submit(){
+ if(!VIEW||VIEW.phase!=='round')return;
  const val=$('inA').value.trim();if(!val)return;
  const r=await gact('answer',{n:+($('rN').textContent||0),value:val});
  if(r.ok===false&&r.msg){
-  const i=$('inA');i.classList.remove('shake');void i.offsetWidth;i.classList.add('shake');
+  shake();
   if(r.msg==='неверно')$('myTries').textContent='неверно — попробуйте ещё';
-  else toast('Формат',r.msg)}
+  else toast('Формат',r.msg);
+ }
 }
  $('btnA').onclick=submit;
  $('inA').addEventListener('keydown',e=>{if(e.key==='Enter')submit()});
@@ -484,6 +508,6 @@ async function submit(){
  $('inIds').value='';
 };
 function copyTxt(t,m){if(navigator.clipboard)navigator.clipboard.writeText(t).then(()=>toast('Буфер обмена',m))}
- $('btnCopyCode').onclick=()=>copyTxt(CUR.code,'Код скопирован.');
- $('btnCopyLink').onclick=()=>copyTxt(location.origin+'/#'+CUR.code,'Ссылка скопирована.');
+ $('btnCopyCode').onclick=()=>{if(CUR)copyTxt(CUR.code,'Код скопирован.')};
+ $('btnCopyLink').onclick=()=>{if(CUR)copyTxt(location.origin+'/#'+CUR.code,'Ссылка скопирована.')};
 </script></body></html>
