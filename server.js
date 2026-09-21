@@ -1,5 +1,7 @@
 /* ═══ ТЕОРЕМА — игровой сервер: аккаунты · комнаты · матч · банк ═══
-   Связь с клиентом — опрос GET /state (проходит через любой прокси).
+   Связь с клиентом — опрос GET /state (работает через любой прокси).
+   Переходы раундов — advanceRoom(): вызывается из /state и из тика,
+   поэтому игра не зависит от одного механизма таймеров.
    Всё состояние — в памяти сервера. Node 18+. */
 
 const http=require('http'),fs=require('fs'),path=require('path'),crypto=require('crypto');
@@ -255,22 +257,30 @@ function newRound(r){
  r.tries=[0,0];r.pendingSkip=null;r.skipEv=null;r.note=null;r.v++;
  console.log('· комната',r.code,'— раунд',r.n,':',r.round.text.slice(0,55)+'…  ответ:',r.round.answer);
 }
-/* тик каждую секунду: таймауты раундов, пауз, пропусков */
-setInterval(()=>{
- const t=now();
- for(const r of rooms.values()){
-  if(r.phase==='round'&&r.round&&t>=r.round.deadline){finishRound(r,'draw',null);continue}
+/* Переводит комнату вперёд по времени: запуск раунда, финал, таймаут пропуска.
+   Вызывается из каждого /state-опроса и из секундного тика. */
+function advanceRoom(r){
+ try{
+  const t=now();
+  if(r.phase==='round'&&r.round&&t>=r.round.deadline){finishRound(r,'draw',null);return}
   if(r.phase==='between'&&r.between&&t>=r.between.until){
-   if(r.between.finalAfter){r.phase='final';r.winner=r.scores[0]>=r.settings.target?0:1;
-    r.between=null;r.v++;console.log('■ комната',r.code,'— матч',r.scores.join(':'))}
-   else newRound(r);
-   continue;
+   if(r.between.finalAfter){
+    r.phase='final';
+    r.winner=r.scores[0]>=r.settings.target?0:1;
+    r.between=null;r.v++;
+    console.log('■ комната',r.code,'— матч',r.scores.join(':'));
+   } else newRound(r);
+   return;
   }
   if(r.pendingSkip&&t>=r.pendingSkip.until){
    r.skipEv={res:'timeout',to:r.pendingSkip.by,n:r.pendingSkip.n};
    r.pendingSkip=null;r.v++;
   }
- }
+ }catch(e){console.log('⚠ advanceRoom:',r.code,e.message)}
+}
+/* тик-страховка: advanceRoom для всех комнат */
+setInterval(()=>{
+ for(const r of rooms.values())advanceRoom(r);
 },1000);
 /* уборка брошенных комнат */
 setInterval(()=>{
@@ -396,7 +406,7 @@ async function handle(d){
    }
    return{added,errs,bankN:bank.length};
   }
-    case 'settings':
+  case 'settings':
   case 'start':
   case 'answer':
   case 'skip':
@@ -417,6 +427,7 @@ const server=http.createServer(async(req,res)=>{
    if(!r){res.writeHead(403,{'Content-Type':'application/json'});
     return res.end('{"error":"нет комнаты"}')}
    r.seen[seat]=now();
+   advanceRoom(r);
    const cv=u.searchParams.get('v');
    res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});
    if(String(r.v)===cv)return res.end('{"same":true}');
@@ -437,5 +448,5 @@ const server=http.createServer(async(req,res)=>{
  res.writeHead(404);res.end();
 });
 server.listen(PORT,'0.0.0.0',()=>{
- console.log('ТЕОРЕМА: слушаю порт '+PORT+' · связь с клиентами — опрос /state');
+ console.log('ТЕОРЕМА: слушаю порт '+PORT+' · переходы — advanceRoom (опрос + тик)');
 });
